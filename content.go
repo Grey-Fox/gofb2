@@ -3,14 +3,12 @@ package gofb2
 import (
 	"encoding/xml"
 	"fmt"
-	"io"
-	"reflect"
 	"strconv"
 )
 
 // Contenter provide interface for tag content
 type Contenter interface {
-	GetXMLName() string
+	GetXMLName() xml.Name
 	GetContent() []Contenter
 	GetText() []byte
 }
@@ -22,43 +20,45 @@ type Title struct {
 	contentBase
 }
 
+func (t *Title) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "p":
+		p := &P{}
+		t.appendContent(p)
+		return p, nil
+	case "empty-line":
+		el := &EmptyLine{}
+		t.appendContent(el)
+		return el, nil
+	default:
+		return t.contentBase.tagCallback(start)
+	}
+}
+
+func (t *Title) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "lang" {
+		t.Lang = attr.Value
+		return nil
+	}
+	return t.contentBase.attrCallback(attr)
+}
+
 // UnmarshalXML unmarshal XML to Title
 func (t *Title) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "p":
-			return &P{}, nil
-		case "empty-line":
-			return &EmptyLine{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "lang" {
-			t.Lang = attr.Value
-			return nil
-		}
-		return t.contentBase.attrCallback(attr)
-	}
-	return t.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(t).Parse(d, start)
 }
 
 // Image https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L283
 // An empty element with an image name as an attribute
 type Image struct {
-	XMLName   xml.Name `xml:"image"`
-	XlinkType string   `xml:"http://www.w3.org/1999/xlink type,attr,omitempty"`
-	XlinkHref string   `xml:"http://www.w3.org/1999/xlink href,attr,omitempty"`
-	Alt       string   `xml:"alt,attr,omitempty"`
-	Title     string   `xml:"title,attr,omitempty"`
-	ID        string   `xml:"id,attr,omitempty"`
+	XlinkType string `xml:"http://www.w3.org/1999/xlink type,attr,omitempty"`
+	XlinkHref string `xml:"http://www.w3.org/1999/xlink href,attr,omitempty"`
+	Alt       string `xml:"alt,attr,omitempty"`
+	Title     string `xml:"title,attr,omitempty"`
+	ID        string `xml:"id,attr,omitempty"`
 
 	emptyContent
 }
-
-// GetXMLName for Contenter interface
-func (i Image) GetXMLName() string { return i.XMLName.Local }
 
 // P https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L293
 // A basic paragraph, may include simple formatting inside
@@ -81,7 +81,7 @@ func (p *P) attrCallback(attr xml.Attr) error {
 
 // UnmarshalXML unmarshal XML to P
 func (p *P) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return p.unmarshalHelper(d, start, p.tagCallback, p.attrCallback, true)
+	return NewParser(p).Parse(d, start)
 }
 
 // Cite https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L304
@@ -89,44 +89,55 @@ func (p *P) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 type Cite struct {
 	ID         string `xml:"id,omitempty"`
 	Lang       string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
-	TextAuthor []P    `xml:"text-author,omitempty"`
+	TextAuthor []*P   `xml:"text-author,omitempty"`
 	contentBase
+}
+
+func (c *Cite) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "text-author":
+		p := &P{}
+		c.TextAuthor = append(c.TextAuthor, p)
+		return p, nil
+	case "p":
+		p := &P{}
+		c.appendContent(p)
+		return p, nil
+	case "poem":
+		p := &Poem{}
+		c.appendContent(p)
+		return p, nil
+	case "subtitle":
+		p := &P{}
+		c.appendContent(p)
+		return p, nil
+	case "table":
+		t := &Table{}
+		c.appendContent(t)
+		return t, nil
+	case "empty-line":
+		el := &EmptyLine{}
+		c.appendContent(el)
+		return el, nil
+	default:
+		return c.contentBase.tagCallback(start)
+	}
+}
+
+func (c *Cite) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "lang" {
+		c.Lang = attr.Value
+	} else if attr.Name.Local == "id" {
+		c.ID = attr.Value
+	} else {
+		return c.contentBase.attrCallback(attr)
+	}
+	return nil
 }
 
 // UnmarshalXML unmarshal XML to Cite
 func (c *Cite) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "text-author":
-			p := P{}
-			err := d.DecodeElement(&p, &e)
-			c.TextAuthor = append(c.TextAuthor, p)
-			return nil, err
-		case "p":
-			return &P{}, nil
-		case "poem":
-			return &Poem{}, nil
-		case "subtitle":
-			return &P{}, nil
-		case "table":
-			return &Table{}, nil
-		case "empty-line":
-			return &EmptyLine{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "lang" {
-			c.Lang = attr.Value
-		} else if attr.Name.Local == "id" {
-			c.ID = attr.Value
-		} else {
-			return fmt.Errorf("unknown attr %s", attr.Name.Local)
-		}
-		return nil
-	}
-	return c.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(c).Parse(d, start)
 }
 
 // Poem https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L321
@@ -137,55 +148,50 @@ type Poem struct {
 	Title   *Title   `xml:"title,omitempty"`
 
 	// Poem epigraph(s), if any
-	Epigraphs []Epigraph `xml:"epigraph,omitempty"`
+	Epigraphs []*Epigraph `xml:"epigraph,omitempty"`
 
 	// subtitle and stanza
 	contentBase
 }
 
+func (p *Poem) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "title":
+		p.Title = &Title{}
+		return p.Title, nil
+	case "epigraph":
+		ep := &Epigraph{}
+		p.Epigraphs = append(p.Epigraphs, ep)
+		return ep, nil
+	case "subtitle":
+		pp := &P{}
+		p.appendContent(pp)
+		return pp, nil
+	case "stanza":
+		s := &Stanza{}
+		p.appendContent(s)
+		return s, nil
+	default:
+		return p.contentBase.tagCallback(start)
+	}
+}
+
 // UnmarshalXML unmarshal XML to StyleType
 func (p *Poem) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "title":
-			p.Title = &Title{}
-			err := d.DecodeElement(p.Title, &e)
-			return nil, err
-		case "epigraph":
-			ep := Epigraph{}
-			err := d.DecodeElement(&ep, &e)
-			if err == nil {
-				p.Epigraphs = append(p.Epigraphs, ep)
-			}
-			return nil, err
-		case "subtitle":
-			return &P{}, nil
-		case "stanza":
-			return &Stanza{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	return p.unmarshalHelper(d, start, tagCallback, nil, false)
+	return NewParser(p).Parse(d, start)
 }
 
 // Stanza https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L338
 // Each poem should have at least one stanza.
 // Stanzas are usually separated with empty lines by user agents.
 type Stanza struct {
-	XMLName  xml.Name `xml:"stanza"`
-	Lang     string   `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
-	Title    *Title   `xml:"title,omitempty"`
-	Subtitle P        `xml:"subtitle,omitempty"`
+	Lang     string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
+	Title    *Title `xml:"title,omitempty"`
+	Subtitle *P     `xml:"subtitle,omitempty"`
 	// An individual line in a stanza
-	V []P `xml:"v"`
+	V []*P `xml:"v"`
 
 	emptyText
-}
-
-// GetXMLName for Contenter interface
-func (s Stanza) GetXMLName() string {
-	return s.XMLName.Local
 }
 
 // GetContent for Contenter interface
@@ -197,44 +203,78 @@ func (s Stanza) GetContent() []Contenter {
 	return c
 }
 
+func (s *Stanza) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "title":
+		s.Title = &Title{}
+		return s.Title, nil
+	case "subtitle":
+		s.Subtitle = &P{}
+		return s.Subtitle, nil
+	case "v":
+		p := &P{}
+		s.V = append(s.V, p)
+		return p, nil
+	default:
+		return s.emptyText.tagCallback(start)
+	}
+}
+
+func (s *Stanza) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "lang" {
+		s.Lang = attr.Value
+		return nil
+	}
+	return s.emptyText.attrCallback(attr)
+}
+
 // Epigraph https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L366
 // An epigraph
 type Epigraph struct {
 	ID         string `xml:"id,omitempty"`
-	TextAuthor []P    `xml:"text-author,omitempty"`
+	TextAuthor []*P   `xml:"text-author,omitempty"`
 	contentBase
+}
+
+func (ep *Epigraph) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "text-author":
+		p := &P{}
+		ep.TextAuthor = append(ep.TextAuthor, p)
+		return p, nil
+	case "p":
+		p := &P{}
+		ep.appendContent(p)
+		return p, nil
+	case "poem":
+		p := &Poem{}
+		ep.appendContent(p)
+		return p, nil
+	case "cite":
+		c := &Cite{}
+		ep.appendContent(c)
+		return c, nil
+	case "empty-line":
+		el := &EmptyLine{}
+		ep.appendContent(el)
+		return el, nil
+	default:
+		return ep.contentBase.tagCallback(start)
+	}
+}
+
+func (ep *Epigraph) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "id" {
+		ep.ID = attr.Value
+	} else {
+		return fmt.Errorf("unknown attr %s", attr.Name.Local)
+	}
+	return nil
 }
 
 // UnmarshalXML unmarshal XML to Epigraph
 func (ep *Epigraph) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "text-author":
-			p := P{}
-			err := d.DecodeElement(&p, &e)
-			ep.TextAuthor = append(ep.TextAuthor, p)
-			return nil, err
-		case "p":
-			return &P{}, nil
-		case "poem":
-			return &Poem{}, nil
-		case "cite":
-			return &Cite{}, nil
-		case "empty-line":
-			return &EmptyLine{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "id" {
-			ep.ID = attr.Value
-		} else {
-			return fmt.Errorf("unknown attr %s", attr.Name.Local)
-		}
-		return nil
-	}
-	return ep.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(ep).Parse(d, start)
 }
 
 // Annotation https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L381
@@ -245,37 +285,51 @@ type Annotation struct {
 	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
 }
 
+func (a *Annotation) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "p":
+		p := &P{}
+		a.appendContent(p)
+		return p, nil
+	case "poem":
+		p := &Poem{}
+		a.appendContent(p)
+		return p, nil
+	case "cite":
+		c := &Cite{}
+		a.appendContent(c)
+		return c, nil
+	case "subtitle":
+		p := &P{}
+		a.appendContent(p)
+		return p, nil
+	case "table":
+		t := &Table{}
+		a.appendContent(t)
+		return t, nil
+	case "empty-line":
+		el := &EmptyLine{}
+		a.appendContent(el)
+		return el, nil
+	default:
+		return a.contentBase.tagCallback(start)
+	}
+}
+
+func (a *Annotation) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "lang" {
+		a.Lang = attr.Value
+	} else if attr.Name.Local == "id" {
+		a.ID = attr.Value
+	} else {
+		return fmt.Errorf("unknown attr %s", attr.Name.Local)
+	}
+	return nil
+}
+
 // UnmarshalXML unmarshal xml to FictionBook struct
 func (a *Annotation) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "p":
-			return &P{}, nil
-		case "poem":
-			return &Poem{}, nil
-		case "cite":
-			return &Cite{}, nil
-		case "subtitle":
-			return &P{}, nil
-		case "table":
-			return &Table{}, nil
-		case "empty-line":
-			return &EmptyLine{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "lang" {
-			a.Lang = attr.Value
-		} else if attr.Name.Local == "id" {
-			a.ID = attr.Value
-		} else {
-			return fmt.Errorf("unknown attr %s", attr.Name.Local)
-		}
-		return nil
-	}
-	return a.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(a).Parse(d, start)
 }
 
 // Section https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L396
@@ -285,7 +339,7 @@ type Section struct {
 	Title *Title `xml:"title,omitempty"`
 
 	// Epigraph(s) for this section
-	Epigraphs []Epigraph `xml:"epigraph,omitempty"`
+	Epigraphs []*Epigraph `xml:"epigraph,omitempty"`
 
 	// Image to be displayed at the top of this section
 	Image *Image `xml:"image,omitempty"`
@@ -294,7 +348,7 @@ type Section struct {
 	Annotation *Annotation `xml:"annotation,omitempty"`
 
 	// or child Sections
-	Sections []Section `xml:"section,omitempty"`
+	Sections []*Section `xml:"section,omitempty"`
 	// or other content
 	contentBase
 
@@ -302,92 +356,102 @@ type Section struct {
 	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
 }
 
+func (s *Section) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "title":
+		s.Title = &Title{}
+		return s.Title, nil
+	case "epigraph":
+		ep := &Epigraph{}
+		s.Epigraphs = append(s.Epigraphs, ep)
+		return ep, nil
+	case "image":
+		i := &Image{}
+		if len(s.Content) > 0 {
+			s.appendContent(i)
+		} else {
+			s.Image = i
+		}
+		return i, nil
+	case "annotation":
+		s.Annotation = &Annotation{}
+		return s.Annotation, nil
+	case "section":
+		cs := &Section{}
+		s.Sections = append(s.Sections, cs)
+		return cs, nil
+	case "p":
+		p := &P{}
+		s.appendContent(p)
+		return p, nil
+	case "poem":
+		p := &Poem{}
+		s.appendContent(p)
+		return p, nil
+	case "subtitle":
+		p := &P{}
+		s.appendContent(p)
+		return p, nil
+	case "cite":
+		c := &Cite{}
+		s.appendContent(c)
+		return c, nil
+	case "empty-line":
+		el := &EmptyLine{}
+		s.appendContent(el)
+		return el, nil
+	case "table":
+		t := &Table{}
+		s.appendContent(t)
+		return t, nil
+	default:
+		return s.contentBase.tagCallback(start)
+	}
+}
+
+func (s *Section) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "lang" {
+		s.Lang = attr.Value
+	} else if attr.Name.Local == "id" {
+		s.ID = attr.Value
+	} else {
+		return s.contentBase.attrCallback(attr)
+	}
+	return nil
+}
+
 // UnmarshalXML unmarshal XML to Section
 func (s *Section) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	parsingContent := false
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "title":
-			s.Title = &Title{}
-			return nil, d.DecodeElement(s.Title, &e)
-		case "epigraph":
-			ep := Epigraph{}
-			err := d.DecodeElement(&ep, &e)
-			if err == nil {
-				s.Epigraphs = append(s.Epigraphs, ep)
-			}
-			return nil, err
-		case "image":
-			if parsingContent {
-				return &Image{}, nil
-			}
-			s.Image = &Image{}
-			return nil, d.DecodeElement(s.Image, &e)
-		case "annotation":
-			s.Annotation = &Annotation{}
-			return nil, d.DecodeElement(s.Annotation, &e)
-		case "section":
-			cs := Section{}
-			err := d.DecodeElement(&cs, &e)
-			if err == nil {
-				s.Sections = append(s.Sections, cs)
-			}
-			return nil, err
-		case "p":
-			parsingContent = true
-			return &P{}, nil
-		case "poem":
-			parsingContent = true
-			return &Poem{}, nil
-		case "subtitle":
-			parsingContent = true
-			return &P{}, nil
-		case "cite":
-			parsingContent = true
-			return &Cite{}, nil
-		case "empty-line":
-			parsingContent = true
-			return &EmptyLine{}, nil
-		case "table":
-			parsingContent = true
-			return &Table{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "lang" {
-			s.Lang = attr.Value
-		} else if attr.Name.Local == "id" {
-			s.ID = attr.Value
-		} else {
-			return fmt.Errorf("unknown attr %s", attr.Name.Local)
-		}
-		return nil
-	}
-	return s.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(s).Parse(d, start)
 }
 
 // StyleType https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L453
 // Markup
 type StyleType struct {
-	contentBase
-	XMLName xml.Name
-	Lang    string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
+	mixed
+	Lang string `xml:"http://www.w3.org/XML/1998/namespace lang,attr,omitempty"`
 }
 
-func (s *StyleType) tagCallback(name string, e xml.StartElement) (Contenter, error) {
-	switch name {
+func (s *StyleType) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
 	case "style":
-		return &NamedStyleType{}, nil
+		nst := &NamedStyleType{}
+		s.appendContent(nst)
+		return nst, nil
 	case "a":
-		return &Link{}, nil
+		link := &Link{}
+		s.appendContent(link)
+		return link, nil
 	case "image":
-		return &InlineImage{}, nil
+		i := &InlineImage{}
+		s.appendContent(i)
+		return i, nil
 	case "strong", "emphasis", "strikethrough", "sub", "sup", "code":
-		return &StyleType{}, nil
+		st := &StyleType{}
+		s.appendContent(st)
+		return st, nil
 	default:
-		return nil, fmt.Errorf("unknown tag %s", name)
+		return s.contentBase.tagCallback(start)
 	}
 }
 
@@ -401,7 +465,7 @@ func (s *StyleType) attrCallback(attr xml.Attr) error {
 
 // UnmarshalXML unmarshal XML to StyleType
 func (s *StyleType) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return s.unmarshalHelper(d, start, s.tagCallback, s.attrCallback, true)
+	return NewParser(s).Parse(d, start)
 }
 
 // NamedStyleType https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L470
@@ -422,7 +486,7 @@ func (s *NamedStyleType) attrCallback(attr xml.Attr) error {
 
 // UnmarshalXML unmarshal XML to NamedStyleType
 func (s *NamedStyleType) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return s.unmarshalHelper(d, start, s.tagCallback, s.attrCallback, true)
+	return NewParser(s).Parse(d, start)
 }
 
 // Link https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L488
@@ -444,7 +508,7 @@ func (l *Link) attrCallback(attr xml.Attr) error {
 			l.XlinkType = attr.Value
 		}
 	case "href":
-		l.XlinkType = attr.Value
+		l.XlinkHref = attr.Value
 	default:
 		return fmt.Errorf("unknown attr %s", attr.Name.Local)
 	}
@@ -453,46 +517,69 @@ func (l *Link) attrCallback(attr xml.Attr) error {
 
 // UnmarshalXML unmarshal XML to Link
 func (l *Link) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return l.unmarshalHelper(d, start, l.tagCallback, l.attrCallback, true)
+	return NewParser(l).Parse(d, start)
 }
 
 // StyleLinkType https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L506
 // Markup
 type StyleLinkType struct {
-	contentBase
+	mixed
 }
 
-func (s *StyleLinkType) tagCallback(name string, e xml.StartElement) (Contenter, error) {
-	switch name {
+func (s *StyleLinkType) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
 	case "image":
-		return &InlineImage{}, nil
+		i := &InlineImage{}
+		s.appendContent(i)
+		return i, nil
 	case "style", "strong", "emphasis", "strikethrough", "sub", "sup", "code":
-		return &StyleLinkType{}, nil
+		c := &StyleLinkType{}
+		s.appendContent(c)
+		return c, nil
 	default:
-		return nil, fmt.Errorf("unknown tag %s", name)
+		return s.contentBase.tagCallback(start)
 	}
 }
 
 // UnmarshalXML unmarshal XML to StyleType
 func (s *StyleLinkType) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return s.unmarshalHelper(d, start, s.tagCallback, nil, true)
+	return NewParser(s).Parse(d, start)
 }
 
 // Table https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L532
 // Basic html-like tables
 type Table struct {
 	XMLName xml.Name `xml:"table"`
-	TR      []TR     `xml:"tr"`
+	TR      []*TR    `xml:"tr"`
 	ID      string   `xml:"id,omitempty"`
 	Style   string   `xml:"style,attr,omitempty"`
 	emptyText
 }
 
-// GetXMLName for Contenter interface
-func (t Table) GetXMLName() string { return t.XMLName.Local }
+func (t *Table) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "id":
+		s := &stringNode{s: &t.ID}
+		return s, nil
+	case "tr":
+		tr := &TR{}
+		t.TR = append(t.TR, tr)
+		return tr, nil
+	default:
+		return t.emptyText.tagCallback(start)
+	}
+}
+
+func (t *Table) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "style" {
+		t.Style = attr.Value
+		return nil
+	}
+	return t.emptyText.attrCallback(attr)
+}
 
 // GetContent for Contenter interface
-func (t Table) GetContent() []Contenter {
+func (t *Table) GetContent() []Contenter {
 	c := make([]Contenter, len(t.TR))
 	for i, v := range t.TR {
 		c[i] = v
@@ -507,24 +594,28 @@ type TR struct {
 	contentBase
 }
 
+func (t *TR) tagCallback(start xml.StartElement) (Node, error) {
+	switch start.Name.Local {
+	case "th", "td":
+		td := &TD{}
+		t.appendContent(td)
+		return td, nil
+	default:
+		return t.contentBase.tagCallback(start)
+	}
+}
+
+func (t *TR) attrCallback(attr xml.Attr) error {
+	if attr.Name.Local == "align" {
+		t.Align = attr.Value
+		return nil
+	}
+	return t.contentBase.attrCallback(attr)
+}
+
 // UnmarshalXML unmarshal XML to Table
 func (t *TR) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	tagCallback := func(name string, e xml.StartElement) (Contenter, error) {
-		switch name {
-		case "th", "td":
-			return &TD{}, nil
-		default:
-			return nil, fmt.Errorf("unknown tag %s", name)
-		}
-	}
-	attrCallback := func(attr xml.Attr) error {
-		if attr.Name.Local == "align" {
-			t.Align = attr.Value
-			return nil
-		}
-		return t.contentBase.attrCallback(attr)
-	}
-	return t.unmarshalHelper(d, start, tagCallback, attrCallback, false)
+	return NewParser(t).Parse(d, start)
 }
 
 // TD https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L700
@@ -557,17 +648,49 @@ func (t *TD) attrCallback(attr xml.Attr) error {
 	case "valign":
 		t.Valign = attr.Value
 	default:
-		return fmt.Errorf("unknown attr %s", attr.Name.Local)
+		return t.contentBase.attrCallback(attr)
 	}
 	return nil
 }
 
 // UnmarshalXML unmarshal XML to TD
 func (t *TD) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	return t.unmarshalHelper(d, start, t.tagCallback, t.attrCallback, false)
+	return NewParser(t).Parse(d, start)
 }
 
-type emptyText struct{}
+// InlineImage https://github.com/gribuser/fb2/blob/14b5fcc6/FictionBook.xsd#L712
+// It's Contenter, but has no text or "child" content
+type InlineImage struct {
+	XlinkType string `xml:"http://www.w3.org/1999/xlink type,attr,omitempty"`
+	XlinkHref string `xml:"http://www.w3.org/1999/xlink href,attr,omitempty"`
+	Alt       string `xml:"alt,attr,omitempty"`
+	emptyContent
+}
+
+func (i *InlineImage) attrCallback(attr xml.Attr) error {
+	switch attr.Name.Local {
+	case "type":
+		i.XlinkType = attr.Value
+	case "href":
+		i.XlinkHref = attr.Value
+	case "alt":
+		i.Alt = attr.Value
+	default:
+		return i.emptyContent.attrCallback(attr)
+	}
+	return nil
+}
+
+// UnmarshalXML unmarshal XML to InlineImage
+func (i *InlineImage) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	return NewParser(i).Parse(d, start)
+}
+
+type emptyText struct{ baseNode }
+
+func (e emptyText) GetXMLName() xml.Name {
+	return e.baseNode.GetXMLName()
+}
 
 func (e emptyText) GetText() []byte { return nil }
 
@@ -581,15 +704,12 @@ type EmptyLine struct {
 	emptyContent
 }
 
-// GetXMLName for Contenter interface
-func (e EmptyLine) GetXMLName() string { return e.XMLName.Local }
-
 // A CharData represents raw text
 type CharData xml.CharData
 
 // GetXMLName return empty string for raw text
-func (c CharData) GetXMLName() string {
-	return ""
+func (c CharData) GetXMLName() xml.Name {
+	return xml.Name{}
 }
 
 // GetText return text
@@ -603,13 +723,8 @@ func (c CharData) GetContent() []Contenter {
 }
 
 type contentBase struct {
-	XMLName xml.Name
+	baseNode
 	Content []Contenter
-}
-
-// GetXMLName return type of content (p, strong, strikethrough, ...)
-func (c contentBase) GetXMLName() string {
-	return c.XMLName.Local
 }
 
 // GetText return nil
@@ -618,62 +733,23 @@ func (c contentBase) GetText() []byte {
 	return nil
 }
 
-// GetContent return nil, because CharData contains only raw text
+// GetContent return content
 func (c contentBase) GetContent() []Contenter {
 	return c.Content
 }
 
-func (c *contentBase) attrCallback(attr xml.Attr) error {
-	return fmt.Errorf("unknown attr: %s", attr.Name.Local)
+func (c *contentBase) appendContent(cont Contenter) {
+	c.Content = append(c.Content, cont)
 }
 
-func (c *contentBase) unmarshalHelper(
-	d *xml.Decoder, start xml.StartElement,
-	tagCallback func(string, xml.StartElement) (Contenter, error),
-	attrCallback func(xml.Attr) error,
-	mixed bool,
-) error {
-	var parseErr parseErrors
-	c.XMLName = start.Name
-	for {
-		token, err := d.Token()
-		if err != nil {
-			if err != io.EOF {
-				parseErr = append(parseErr, err)
-			}
-			break
-		}
-		switch e := token.(type) {
-		case xml.StartElement:
-			o, err := tagCallback(e.Name.Local, e)
-			if err != nil {
-				parseErr = append(parseErr, err)
-			} else if o != nil {
-				if err := d.DecodeElement(o, &e); err != nil {
-					parseErr = append(parseErr, err)
-				}
-				val := reflect.ValueOf(o)
-				c.Content = append(c.Content, val.Elem().Interface().(Contenter))
-			}
-		case xml.CharData:
-			if mixed {
-				tmp := make(CharData, len(e))
-				// copy buffer, golang reuse byte array
-				copy(tmp, e)
-				c.Content = append(c.Content, tmp)
-			}
-		}
-	}
-	if attrCallback == nil {
-		attrCallback = c.attrCallback
-	}
-	for _, attr := range start.Attr {
-		if err := attrCallback(attr); err != nil {
-			parseErr = append(parseErr, err)
-		}
-	}
-	if parseErr != nil {
-		return fmt.Errorf("error while parsing %s: %s", start.Name.Local, parseErr)
-	}
+type mixed struct {
+	contentBase
+}
+
+func (m *mixed) charDataCallback(e xml.CharData) error {
+	tmp := make(CharData, len(e))
+	// copy buffer, golang reuse byte array
+	copy(tmp, e)
+	m.Content = append(m.Content, tmp)
 	return nil
 }
