@@ -21,17 +21,17 @@ func printContent(cont ...fb2.Contenter) {
 		switch e := c.(type) {
 		case fb2.CharData:
 			fmt.Printf(strings.ReplaceAll(string(e.GetText()), "\t", ""))
-		case fb2.P:
+		case *fb2.P:
 			printContent(e.Content...)
 			fmt.Println()
 		case fb2.EmptyLine:
 			fmt.Println()
-		case fb2.Poem:
+		case *fb2.Poem:
 			if e.Title != nil {
 				printContent(e.Title)
 			}
 			printContent(e.GetContent()...)
-		case fb2.Cite:
+		case *fb2.Cite:
 			fmt.Printf("> ")
 			printContent(e.GetContent()...)
 			for _, a := range e.TextAuthor {
@@ -47,7 +47,7 @@ func printContent(cont ...fb2.Contenter) {
 
 func printSection(s *fb2.Section) {
 	for _, s := range s.Sections {
-		printSection(&s)
+		printSection(s)
 	}
 	printContent(s.Content...)
 }
@@ -59,7 +59,7 @@ func main() {
 	v := fb2.FictionBook{}
 	check(xml.Unmarshal([]byte(data), &v))
 	printContent(v.Description.TitleInfo.Annotation)
-	printSection(&v.Body.Sections[0])
+	printSection(v.Body.Sections[0])
 }
 
 func check(e error) {
